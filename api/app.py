@@ -80,7 +80,7 @@ app = modal.App("latent-scope-api")
         Secret.from_name("huggingface-secret"),
     ]
 )
-class TransformerModel:
+class App:
     @enter()
     # async def start_engine(self):
     def start_engine(self):
@@ -134,7 +134,7 @@ class TransformerModel:
         db = lancedb.connect(f"/lancedb/{db}")
         table = db.open_table(scope)
         print(db, scope, "🥧 scope_data")
-        columns = ["x","y","tile_index_64","cluster","raw_cluster","label","deleted"]
+        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","label","deleted"]
         # we just want to return all the scope rows by default
         return table.search().select(columns).limit(10000000).to_list()
 
