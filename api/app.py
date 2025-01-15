@@ -64,12 +64,7 @@ with st_image.imports():
     import torch
     from sentence_transformers import SentenceTransformer
     import lancedb
-    import openai
-    import outlines
-    from outlines import models, generate
-    import pyarrow as pa
     import json
-    import uuid
 
 app = modal.App("latent-scope-api")
 
@@ -100,7 +95,6 @@ class TransformerModel:
     @web_endpoint(method="GET")
     # async def query(self, query: str):
     def nn(self, query: str, model: str, db: str, scope: str):
-        # need 
         # query: text to embed and search with
         # model: nomic-ai/nomic-embed-text-v1.5
         # db: user/dataset
@@ -108,15 +102,38 @@ class TransformerModel:
         model = SentenceTransformer(model, trust_remote_code=True, device=self.device)
         db = lancedb.connect(f"/lancedb/{db}")
         table = db.open_table(scope)
-        print("🔍 query", query)
+        print(db, scope, "🔍 query", query)
         embeddings = model.encode(query, normalize_embeddings=True)
         results = table.search(embeddings).metric("cosine").limit(10).to_list()
         return results
     
     @web_endpoint(method="GET")
+    def scope_meta(self, db: str, scope: str):
+        with open(f"/lancedb/{db}/{scope}.json", "r") as f:
+            return json.load(f)
+
+    @web_endpoint(method="GET")
+    def scope_preview(self, db: str, scope: str):
+        from fastapi.responses import Response  # Add this import at the top
+
+        file_path = f"/lancedb/{db}/{scope}.png"
+        print(f"Attempting to open file: {file_path}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            print(f"File not found: {file_path}")
+            return {"error": "File not found"}
+        with open(f"/lancedb/{db}/{scope}.png", "rb") as f:
+            return Response(
+                content=f.read(),
+                media_type="image/png"
+            )
+    
+    @web_endpoint(method="GET")
     def scope_data(self, db: str, scope: str):
         db = lancedb.connect(f"/lancedb/{db}")
         table = db.open_table(scope)
+        print(db, scope, "🥧 scope_data")
         columns = ["x","y","tile_index_64","cluster","raw_cluster","label","deleted"]
         # we just want to return all the scope rows by default
         return table.search().select(columns).limit(10000000).to_list()
@@ -125,10 +142,21 @@ class TransformerModel:
     def rows_by_index(self, db: str, scope: str, indices: str):
         db = lancedb.connect(f"/lancedb/{db}")
         table = db.open_table(scope)
-        print("schema", table.schema)
+        print(db, scope, "🚣 rows_by_index", indices)
+        indices = [int(i) for i in indices.split(",")]
         # Get all column names from schema and exclude the vector column
         columns = [field.name for field in table.schema if field.name != "vector"]
-        return table.search().where(f"index in {indices}").select(columns).to_list()
+        return table.to_lance().take(indices=indices, columns=columns).to_pylist()
+        # return table.search().where(f"index in {indices}").select(columns).to_list()
+    
+    @web_endpoint(method="GET")
+    def feature(self, db: str, scope: str, feature: str, threshold: float):
+        db = lancedb.connect(f"/lancedb/{db}")
+        table = db.open_table(scope)
+        print(db, scope, "📌 feature", feature, threshold)
+        # table.search().where("(array_has(sae_indices, 746)) AND (array_element(sae_acts, 1) > .1)").select(columns).limit(1).to_list()
+        indices = table.search().where(f"array_has(sae_indices, {feature}) AND array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int)) > {threshold}").select(["index"]).to_list()
+        return [d["index"] for d in indices]
 
     # @web_endpoint(method="GET")
     # def sae(self, db: str, scope: str, feature: int, threshold: float):
