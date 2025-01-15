@@ -8,6 +8,7 @@ from modal import method, enter, Image, Secret, Volume, web_endpoint
 # MODEL_ID = "nomic-ai/nomic-embed-text-v1.5"
 MODEL_REVISION = "main"
 MODEL_DIR = "/models"
+BIG_LIMIT = 10000000
 
 volume = Volume.from_name("lancedb", create_if_missing=False)
 hf_model_cache = Volume.from_name("hf_model_cache", create_if_missing=True)
@@ -104,7 +105,7 @@ class App:
         table = db.open_table(scope)
         print(db, scope, "🔍 query", query)
         embeddings = model.encode(query, normalize_embeddings=True)
-        results = table.search(embeddings).metric("cosine").limit(10).to_list()
+        results = table.search(embeddings).metric("cosine").select(["index"]).limit(BIG_LIMIT).to_list()
         return results
     
     @web_endpoint(method="GET")
@@ -136,7 +137,7 @@ class App:
         print(db, scope, "🥧 scope_data")
         columns = ["index","x","y","tile_index_64","cluster","raw_cluster","label","deleted"]
         # we just want to return all the scope rows by default
-        return table.search().select(columns).limit(10000000).to_list()
+        return table.search().select(columns).limit(BIG_LIMIT).to_list()
 
     @web_endpoint(method="GET")
     def rows_by_index(self, db: str, scope: str, indices: str):
@@ -155,8 +156,37 @@ class App:
         table = db.open_table(scope)
         print(db, scope, "📌 feature", feature, threshold)
         # table.search().where("(array_has(sae_indices, 746)) AND (array_element(sae_acts, 1) > .1)").select(columns).limit(1).to_list()
-        indices = table.search().where(f"array_has(sae_indices, {feature}) AND array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int)) > {threshold}").select(["index"]).to_list()
+        where = f"array_has(sae_indices, {feature}) AND array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int)) > {threshold}"
+        indices = table.search().where(where).select(["index"]).limit(BIG_LIMIT).to_list()
         return [d["index"] for d in indices]
+
+    @web_endpoint(method="GET")
+    def column_filter(self, db: str, scope: str, query: str):
+        db = lancedb.connect(f"/lancedb/{db}")
+        table = db.open_table(scope)
+        print(db, scope, "🔍 column_filter", query)
+        filters = json.loads(query)
+        where_clauses = []
+        for f in filters:
+            if f["type"] == "eq":
+                where_clauses.append(f"{f['column']} = '{f['value']}'")
+            elif f["type"] == "gt":
+                where_clauses.append(f"{f['column']} > {f['value']}")
+            elif f["type"] == "lt":
+                where_clauses.append(f"{f['column']} < {f['value']}")
+            elif f["type"] == "gte":
+                where_clauses.append(f"{f['column']} >= {f['value']}")
+            elif f["type"] == "lte":
+                where_clauses.append(f"{f['column']} <= {f['value']}")
+            elif f["type"] == "in":
+                values = [f"'{v}'" if isinstance(v, str) else str(v) for v in f['value']]
+                where_clauses.append(f"{f['column']} IN ({','.join(values)})")
+            elif f["type"] == "contains":
+                where_clauses.append(f"{f['column']} LIKE '%{f['value']}%'")
+        
+        where_clause = " AND ".join(where_clauses)
+        print("where_clause", where_clause)
+        return table.search().where(where_clause).select(["index"]).limit(BIG_LIMIT).to_list()
 
     # @web_endpoint(method="GET")
     # def sae(self, db: str, scope: str, feature: int, threshold: float):
