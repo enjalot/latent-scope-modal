@@ -70,10 +70,12 @@ with st_image.imports():
 app = modal.App("latent-scope-api")
 
 @app.cls(
-    cpu=2,
+    cpu=4,
+    allow_concurrent_inputs=100,
+    keep_warm=1, # keep one instance always?
+    concurrency_limit=10,
     timeout=60 * 10,
     container_idle_timeout=60 * 10,
-    allow_concurrent_inputs=1,
     image=st_image,
     volumes={"/lancedb": volume, "/hf_cache": hf_model_cache},
     secrets=[
@@ -83,25 +85,27 @@ app = modal.App("latent-scope-api")
 )
 class App:
     @enter()
-    # async def start_engine(self):
     def start_engine(self):
-        # self.device = torch.device("cuda")
         self.device = torch.device("cpu")
-        # print("🥶 cold starting inference")
-        # start = time.monotonic_ns()
-        # duration_s = (time.monotonic_ns() - start) / 1e9
-        # print(f"🏎️ engine started in {duration_s:.0f}s")
+        # Initialize model cache
+        self.models = {}
+        # Initialize db connection pool
+        self.db_connections = {}
         
-   
+    def get_model(self, model_name):
+        if model_name not in self.models:
+            self.models[model_name] = SentenceTransformer(model_name, trust_remote_code=True, device=self.device)
+        return self.models[model_name]
+    
+    def get_db_connection(self, db_name):
+        if db_name not in self.db_connections:
+            self.db_connections[db_name] = lancedb.connect(f"/lancedb/{db_name}")
+        return self.db_connections[db_name]
+
     @web_endpoint(method="GET")
-    # async def query(self, query: str):
     def nn(self, query: str, model: str, db: str, scope: str):
-        # query: text to embed and search with
-        # model: nomic-ai/nomic-embed-text-v1.5
-        # db: user/dataset
-        # scope: scopes-00X
-        model = SentenceTransformer(model, trust_remote_code=True, device=self.device)
-        db = lancedb.connect(f"/lancedb/{db}")
+        model = self.get_model(model)
+        db = self.get_db_connection(db)
         table = db.open_table(scope)
         print(db, scope, "🔍 query", query)
         embeddings = model.encode(query, normalize_embeddings=True)
@@ -113,29 +117,30 @@ class App:
         with open(f"/lancedb/{db}/{scope}.json", "r") as f:
             return json.load(f)
 
-    @web_endpoint(method="GET")
-    def scope_preview(self, db: str, scope: str):
-        from fastapi.responses import Response  # Add this import at the top
+    # serve static assets from cloud storage
+    # @web_endpoint(method="GET")
+    # def scope_preview(self, db: str, scope: str):
+    #     from fastapi.responses import Response  # Add this import at the top
 
-        file_path = f"/lancedb/{db}/{scope}.png"
-        print(f"Attempting to open file: {file_path}")
+    #     file_path = f"/lancedb/{db}/{scope}.png"
+    #     print(f"Attempting to open file: {file_path}")
         
-        # Check if file exists
-        if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
-            return {"error": "File not found"}
-        with open(f"/lancedb/{db}/{scope}.png", "rb") as f:
-            return Response(
-                content=f.read(),
-                media_type="image/png"
-            )
+    #     # Check if file exists
+    #     if not os.path.exists(file_path):
+    #         print(f"File not found: {file_path}")
+    #         return {"error": "File not found"}
+    #     with open(f"/lancedb/{db}/{scope}.png", "rb") as f:
+    #         return Response(
+    #             content=f.read(),
+    #             media_type="image/png"
+    #         )
     
     @web_endpoint(method="GET")
     def scope_data(self, db: str, scope: str):
         db = lancedb.connect(f"/lancedb/{db}")
         table = db.open_table(scope)
         print(db, scope, "🥧 scope_data")
-        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","label","deleted"]
+        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"] #"label",
         # we just want to return all the scope rows by default
         return table.search().select(columns).limit(BIG_LIMIT).to_list()
 
