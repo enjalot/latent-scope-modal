@@ -13,13 +13,25 @@ for now you'll need to export:
 python latentscope/scripts/export_lance.py --directory ~/latent-scope-demo --dataset ls-datavis-misunderstood --scope_id scopes-001 --metric cosine 
 ```
 
+Then prep the scope:
+This will create a static binary file of the text that can be used to cheaply fetch tooltip text
+```bash
+python scripts/prep.py --directory ~/latent-scope-demo --dataset ls-datavis-misunderstood --scope_id scopes-001
+```
+
 Then upload the lancedb folder to the modal volume:
 
 ```bash
 modal volume put lancedb ~/latent-scope-demo/ls-datavis-misunderstood/lancedb enjalot/ls-datavis-misunderstood
 ```
 
+upload the json and binary files to a cloud storage bucket
 ```bash
+gsutil -m cp ~/latent-scope-demo/ls-datavis-misunderstood/scopes/scopes-001.json gs://fun-data/latent-scope/demos/enjalot/ls-datavis-misunderstood/scopes/scopes-001.json
+gsutil -m cp ~/latent-scope-demo/ls-datavis-misunderstood/scopes/scopes-001.bin gs://fun-data/latent-scope/demos/enjalot/ls-datavis-misunderstood/scopes/scopes-001.bin
+```
+
+Then deploy the app:
 # for development
 modal serve api/app.py
 # for production

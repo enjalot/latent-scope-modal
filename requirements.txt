@@ -1,2 +1,6 @@
 modal
 lancedb
+pandas
+pyarrow
+h5py
+lancedb
