@@ -38,7 +38,7 @@ def export_lance(directory, dataset, scope_id, metric="cosine", partitions=256, 
     print(f"Converting embeddings to numpy arrays", embeddings['embeddings'].shape)
     scope_df["vector"] = [np.array(row) for row in embeddings['embeddings']]
 
-    if scope_meta["sae_id"]:
+    if "sae_id" in scope_meta and scope_meta["sae_id"]:
         print(f"SAE scope detected, adding metadata")
         # read in the sae indices
         sae_path = os.path.join(dataset_path, "saes", f"{scope_meta['sae_id']}.h5")
@@ -69,7 +69,7 @@ def export_lance(directory, dataset, scope_id, metric="cosine", partitions=256, 
     print(f"Creating index for cluster on table '{table_name}'")
     tbl.create_scalar_index("cluster", index_type="BTREE")
 
-    if scope_meta["sae_id"]:
+    if "sae_id" in scope_meta and scope_meta["sae_id"]:
         print(f"Creating index for sae_indices on table '{table_name}'")
         tbl.create_scalar_index("sae_indices", index_type="LABEL_LIST")
 
