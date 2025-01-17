@@ -70,9 +70,9 @@ with st_image.imports():
 app = modal.App("latent-scope-api")
 
 @app.cls(
-    cpu=4,
+    cpu=1,
     allow_concurrent_inputs=100,
-    keep_warm=1, # keep one instance always?
+    keep_warm=0, # keep one instance always?
     concurrency_limit=10,
     timeout=60 * 10,
     container_idle_timeout=60 * 10,
