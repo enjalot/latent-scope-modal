@@ -28,6 +28,7 @@ def prep_scope(directory, dataset, scope_id):
             else:
                 encoded = encoded + b' ' * (1000 - len(encoded))
             f.write(encoded)
+    print(f"🔥 prepped text for scope {scope_id} for {dataset}")
 
 def main():
     parser = argparse.ArgumentParser(description="Convert a scope to a LanceDB database")
