@@ -87,10 +87,10 @@ class App:
     @enter()
     def start_engine(self):
         self.device = torch.device("cpu")
-        # Initialize model cache
+        # Initialize caches
         self.models = {}
-        # Initialize db connection pool
         self.db_connections = {}
+        self.table_connections = {}  # New cache for tables
         
     def get_model(self, model_name):
         if model_name not in self.models:
@@ -102,11 +102,17 @@ class App:
             self.db_connections[db_name] = lancedb.connect(f"/lancedb/{db_name}")
         return self.db_connections[db_name]
 
+    def get_table(self, db_name, scope):
+        cache_key = f"{db_name}/{scope}"
+        if cache_key not in self.table_connections:
+            db = self.get_db_connection(db_name)
+            self.table_connections[cache_key] = db.open_table(scope)
+        return self.table_connections[cache_key]
+
     @web_endpoint(method="GET")
     def nn(self, query: str, model: str, db: str, scope: str):
         model = self.get_model(model)
-        db = self.get_db_connection(db)
-        table = db.open_table(scope)
+        table = self.get_table(db, scope)
         print(db, scope, "🔍 query", query)
         embeddings = model.encode(query, normalize_embeddings=True)
         results = table.search(embeddings).metric("cosine").select(["index"]).limit(BIG_LIMIT).to_list()
@@ -137,17 +143,14 @@ class App:
     
     @web_endpoint(method="GET")
     def scope_data(self, db: str, scope: str):
-        db = lancedb.connect(f"/lancedb/{db}")
-        table = db.open_table(scope)
+        table = self.get_table(db, scope)
         print(db, scope, "🥧 scope_data")
-        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"] #"label",
-        # we just want to return all the scope rows by default
+        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"]
         return table.search().select(columns).limit(BIG_LIMIT).to_list()
 
     @web_endpoint(method="GET")
     def rows_by_index(self, db: str, scope: str, indices: str):
-        db = lancedb.connect(f"/lancedb/{db}")
-        table = db.open_table(scope)
+        table = self.get_table(db, scope)
         print(db, scope, "🚣 rows_by_index", indices)
         indices = [int(i) for i in indices.split(",")]
         # Get all column names from schema and exclude the vector column
@@ -157,18 +160,15 @@ class App:
     
     @web_endpoint(method="GET")
     def feature(self, db: str, scope: str, feature: str, threshold: float):
-        db = lancedb.connect(f"/lancedb/{db}")
-        table = db.open_table(scope)
+        table = self.get_table(db, scope)
         print(db, scope, "📌 feature", feature, threshold)
-        # table.search().where("(array_has(sae_indices, 746)) AND (array_element(sae_acts, 1) > .1)").select(columns).limit(1).to_list()
         where = f"array_has(sae_indices, {feature}) AND array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int)) > {threshold}"
         indices = table.search().where(where).select(["index"]).limit(BIG_LIMIT).to_list()
         return [d["index"] for d in indices]
 
     @web_endpoint(method="GET")
     def column_filter(self, db: str, scope: str, query: str):
-        db = lancedb.connect(f"/lancedb/{db}")
-        table = db.open_table(scope)
+        table = self.get_table(db, scope)
         print(db, scope, "🔍 column_filter", query)
         filters = json.loads(query)
         where_clauses = []
