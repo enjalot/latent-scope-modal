@@ -11,6 +11,10 @@ def upload_scope(username, directory, dataset, scope_id):
     cpcmd = f"gsutil -m cp {directory}/{dataset}/scopes/{scope_id}.bin gs://fun-data/latent-scope/demos/{username}/{dataset}/{scope_id}.bin"
     print(cpcmd)
     os.system(cpcmd)
+    cpcmd = f"gsutil -m cp {directory}/{dataset}/scopes/{scope_id}.parquet gs://fun-data/latent-scope/demos/{username}/{dataset}/{scope_id}.parquet"
+    print(cpcmd)
+    os.system(cpcmd)
+
     # os.system(f"gsutil -m cp {directory}/{dataset}/scopes/{scope_id}.png gs://fun-data/latent-scope/demos/{username}/{dataset}/{scope_id}.png")
 
 def main():
