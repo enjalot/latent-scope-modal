@@ -173,21 +173,23 @@ class App:
         filters = json.loads(query)
         where_clauses = []
         for f in filters:
+            # Add quotes around column names
+            column_name = f'`{f["column"]}`'
             if f["type"] == "eq":
-                where_clauses.append(f"{f['column']} = '{f['value']}'")
+                where_clauses.append(f"{column_name} = '{f['value']}'")
             elif f["type"] == "gt":
-                where_clauses.append(f"{f['column']} > {f['value']}")
+                where_clauses.append(f"{column_name} > {f['value']}")
             elif f["type"] == "lt":
-                where_clauses.append(f"{f['column']} < {f['value']}")
+                where_clauses.append(f"{column_name} < {f['value']}")
             elif f["type"] == "gte":
-                where_clauses.append(f"{f['column']} >= {f['value']}")
+                where_clauses.append(f"{column_name} >= {f['value']}")
             elif f["type"] == "lte":
-                where_clauses.append(f"{f['column']} <= {f['value']}")
+                where_clauses.append(f"{column_name} <= {f['value']}")
             elif f["type"] == "in":
                 values = [f"'{v}'" if isinstance(v, str) else str(v) for v in f['value']]
-                where_clauses.append(f"{f['column']} IN ({','.join(values)})")
+                where_clauses.append(f"{column_name} IN ({','.join(values)})")
             elif f["type"] == "contains":
-                where_clauses.append(f"{f['column']} LIKE '%{f['value']}%'")
+                where_clauses.append(f"{column_name} LIKE '%{f['value']}%'")
         
         where_clause = " AND ".join(where_clauses)
         print("where_clause", where_clause)
