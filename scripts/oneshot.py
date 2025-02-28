@@ -3,7 +3,8 @@ import argparse
 
 def oneshot(username, directory, dataset, scope_id):
     os.system(f"python scripts/prep.py --username {username} --directory {directory} --dataset {dataset} --scope_id {scope_id}")
-    os.system(f"python scripts/export_lance.py --username {username} --directory {directory} --dataset {dataset} --scope_id {scope_id}")
+    # should no longer need this since latentscope 0.6 creates the lance db
+    # os.system(f"python scripts/export_lance.py --username {username} --directory {directory} --dataset {dataset} --scope_id {scope_id}")
     os.system(f"python scripts/upload.py --username {username} --directory {directory} --dataset {dataset} --scope_id {scope_id}")
 
 def main():
