@@ -72,7 +72,7 @@ app = modal.App("latent-scope-api")
 @app.cls(
     cpu=1,
     allow_concurrent_inputs=100,
-    keep_warm=0, # keep one instance always?
+    keep_warm=1, # keep one instance always
     concurrency_limit=10,
     timeout=60 * 10,
     container_idle_timeout=60 * 10,
@@ -163,8 +163,16 @@ class App:
         table = self.get_table(db, scope)
         print(db, scope, "📌 feature", feature, threshold)
         where = f"array_has(sae_indices, {feature}) AND array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int)) > {threshold}"
-        indices = table.search().where(where).select(["index"]).limit(BIG_LIMIT).to_list()
-        return [d["index"] for d in indices]
+        # columns= {
+            # "index":"index", 
+            # "activation":f"array_element(sae_acts, cast(array_position(sae_indices, {feature}) as int))"
+        # }
+        columns = ["index", "sae_indices", "sae_acts"]
+        indices = table.search().where(where).select(columns).limit(BIG_LIMIT).to_list()
+        # Sort indices by activation value in descending order
+        # TODO: this would probably be more perfomant inside lance (but only if there are a ton of rows for the feature)
+        sorted_indices = sorted(indices, key=lambda x: x["sae_acts"][x["sae_indices"].index(int(feature))], reverse=True)
+        return [d["index"] for d in sorted_indices]
 
     @web_endpoint(method="GET")
     def column_filter(self, db: str, scope: str, query: str):

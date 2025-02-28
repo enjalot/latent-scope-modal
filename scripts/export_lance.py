@@ -13,7 +13,7 @@ import lancedb
 import numpy as np
 import pandas as pd
 
-def export_lance(directory, dataset, scope_id, metric="cosine", partitions=256, sub_vectors=128):
+def export_lance(directory, dataset, scope_id, metric="cosine", partitions=256):
     dataset_path = os.path.join(directory, dataset)
     print(f"Exporting scope {scope_id} to LanceDB database in {dataset_path}")
     
@@ -63,6 +63,8 @@ def export_lance(directory, dataset, scope_id, metric="cosine", partitions=256, 
     tbl = db.create_table(table_name, scope_df)
 
     print(f"Creating ANN index for embeddings on table '{table_name}'")
+    dim = embeddings['embeddings'].shape[1]
+    sub_vectors = dim // 16
     print(f"Partitioning into {partitions} partitions, {sub_vectors} sub-vectors")
     tbl.create_index(num_partitions=partitions, num_sub_vectors=sub_vectors, metric=metric)
 
@@ -84,7 +86,7 @@ def main():
     parser.add_argument("--scope_id", help="ID of the scope to convert", type=str, required=True)
     parser.add_argument("--metric", help="Metric to use for the index", type=str, default="cosine")
     parser.add_argument("--partitions", help="Number of partitions to use for the index", type=int, default=256)
-    parser.add_argument("--sub_vectors", help="Number of sub-vectors to use for the index", type=int, default=128)
+    # parser.add_argument("--sub_vectors", help="Number of sub-vectors to use for the index", type=int, default=128)
     parser.add_argument("--username", help="Username of the dataset", type=str) # not used, but allows for same command structure as upload
     args = parser.parse_args()
     print(f"ARGS: {args}")
