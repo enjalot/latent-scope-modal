@@ -4,3 +4,4 @@ pandas
 pyarrow
 h5py
 lancedb
+latentsae

@@ -34,7 +34,9 @@ st_image = (
         "numpy",
         "pyarrow",
         "sentence-transformers==3.2.0",
+        "transformers",
         "huggingface_hub==0.23.2",
+        "latentsae==0.1.3",
         "einops==0.7.0",
         "hf-transfer==0.1.6",
         "lancedb",
@@ -45,6 +47,7 @@ st_image = (
     )
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
     .env({"HF_HOME": "/hf_model_cache"})
+    .env({"SAE_DISABLE_TRITON": "1"})
     # .run_function(
     #     download_model_to_image,
     #     timeout=60 * 20,
@@ -72,10 +75,10 @@ app = modal.App("latent-scope-api")
 @app.cls(
     cpu=1,
     allow_concurrent_inputs=100,
-    keep_warm=1, # keep one instance always
-    concurrency_limit=10,
+    min_containers=1, # keep one instance always
+    max_containers=10,
     timeout=60 * 10,
-    container_idle_timeout=60 * 10,
+    scaledown_window=60 * 10,
     image=st_image,
     volumes={"/lancedb": volume, "/hf_cache": hf_model_cache},
     secrets=[
@@ -91,7 +94,9 @@ class App:
         self.models = {}
         self.db_connections = {}
         self.table_connections = {}  # New cache for tables
-        
+        self.sae_models = {}
+        self.transformer_models = {}
+
     def get_model(self, model_name):
         if model_name not in self.models:
             self.models[model_name] = SentenceTransformer(model_name, trust_remote_code=True, device=self.device)
@@ -109,6 +114,22 @@ class App:
             self.table_connections[cache_key] = db.open_table(scope)
         return self.table_connections[cache_key]
 
+    def get_sae(self, model_name, k_expansion):
+        model_id = f"{model_name}-{k_expansion}"
+        if model_id not in self.sae_models:
+            from latentsae.sae import Sae
+            self.sae_models[model_id] = Sae.load_from_hub(model_name, k_expansion) 
+        return self.sae_models[model_id]
+    
+    def get_transformer(self, model_name):
+        if model_name not in self.transformer_models:
+            from transformers import AutoTokenizer, AutoModel
+            self.transformer_models[model_name] = {
+                "tokenizer": AutoTokenizer.from_pretrained(model_name),
+                "model": AutoModel.from_pretrained(model_name, trust_remote_code=True)
+            }
+        return self.transformer_models[model_name]
+
     @web_endpoint(method="GET")
     def nn(self, query: str, model: str, db: str, scope: str):
         model = self.get_model(model)
@@ -117,36 +138,30 @@ class App:
         embeddings = model.encode(query, normalize_embeddings=True)
         results = table.search(embeddings).metric("cosine").select(["index"]).limit(BIG_LIMIT).to_list()
         return results
-    
-    @web_endpoint(method="GET")
-    def scope_meta(self, db: str, scope: str):
-        with open(f"/lancedb/{db}/{scope}.json", "r") as f:
-            return json.load(f)
 
-    # serve static assets from cloud storage
-    # @web_endpoint(method="GET")
-    # def scope_preview(self, db: str, scope: str):
-    #     from fastapi.responses import Response  # Add this import at the top
-
-    #     file_path = f"/lancedb/{db}/{scope}.png"
-    #     print(f"Attempting to open file: {file_path}")
-        
-    #     # Check if file exists
-    #     if not os.path.exists(file_path):
-    #         print(f"File not found: {file_path}")
-    #         return {"error": "File not found"}
-    #     with open(f"/lancedb/{db}/{scope}.png", "rb") as f:
-    #         return Response(
-    #             content=f.read(),
-    #             media_type="image/png"
-    #         )
-    
     @web_endpoint(method="GET")
-    def scope_data(self, db: str, scope: str):
+    def nn2(self, query: str, model: str, db: str, scope: str):
+        model = self.get_model(model)
         table = self.get_table(db, scope)
-        print(db, scope, "🥧 scope_data")
-        columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"]
-        return table.search().select(columns).limit(BIG_LIMIT).to_list()
+        print(db, scope, "🔍 query", query)
+        embeddings = model.encode(query, normalize_embeddings=True)
+        print("searching")
+        results = table.search(embeddings).metric("cosine").limit(100).to_list()
+        print("done")
+        return results
+
+    
+    # @web_endpoint(method="GET")
+    # def scope_meta(self, db: str, scope: str):
+    #     with open(f"/lancedb/{db}/{scope}.json", "r") as f:
+    #         return json.load(f)
+    
+    # @web_endpoint(method="GET")
+    # def scope_data(self, db: str, scope: str):
+    #     table = self.get_table(db, scope)
+    #     print(db, scope, "🥧 scope_data")
+    #     columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"]
+    #     return table.search().select(columns).limit(BIG_LIMIT).to_list()
 
     @web_endpoint(method="GET")
     def rows_by_index(self, db: str, scope: str, indices: str):
@@ -203,8 +218,80 @@ class App:
         print("where_clause", where_clause)
         return table.search().where(where_clause).select(["index"]).limit(BIG_LIMIT).to_list()
 
-    # @web_endpoint(method="GET")
-    # def sae(self, db: str, scope: str, feature: int, threshold: float):
-    #     db = lancedb.connect(f"/lancedb/{db}")
-    #     table = db.open_table(scope)
-    #     return table.search().where(f"{feature} in sae_features AND threshold > {threshold}").to_list()
+    @web_endpoint(method="GET")
+    def calc_embedding(self, query: str):
+        from transformers import AutoTokenizer, AutoModel
+        import torch
+
+        model_name = "nomic-ai/nomic-embed-text-v1.5"
+        model = self.get_transformer(model_name)
+        tokenizer = model["tokenizer"]
+        model = model["model"]
+
+        def mean_pooling(token_embeddings, attention_mask):
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+
+        def get_hidden_states(text, model, tokenizer):
+            # Tokenize the text and move to GPU if available
+            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+            # Get token spans to preserve boundaries
+            encoding = tokenizer(text, return_offsets_mapping=True)
+            token_spans = encoding.offset_mapping
+
+            print("tokens", tokens)
+            print("token_spans", token_spans)
+
+            print("tokens", tokens)
+            print("DECODED",tokenizer.decode(inputs["input_ids"][0]))
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model = model.to(device)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            # Get hidden states
+            with torch.no_grad():
+                outputs = model(**inputs)
+                
+            # Get the last hidden state
+            embedding = mean_pooling(outputs[0], inputs["attention_mask"])
+            normalized_embeddings = torch.nn.functional.normalize(embedding, p=2, dim=1)
+            normalized_hidden_states = torch.nn.functional.normalize(outputs[0], p=2, dim=1)
+            return { 
+                "text": text,
+                "token_ids": inputs["input_ids"].cpu().numpy().tolist()[0],
+                "tokens": tokens,
+                "token_spans": token_spans,
+                "hidden_states": normalized_hidden_states.cpu().numpy().tolist(), 
+                "embedding": normalized_embeddings.cpu().numpy().tolist()[0]  # we only embed one query at a time
+            }
+        return get_hidden_states([query], model, tokenizer)
+
+    @web_endpoint(method="POST")
+    def calc_sae(self, item: dict):
+        print("calc_sae", item.keys())
+        model_name = "enjalot/sae-nomic-text-v1.5-FineWeb-edu-100BT"
+        k_expansion = "64_32"
+        sae = self.get_sae(model_name, k_expansion)
+        if "embedding" in item:
+            embedding = np.array(item["embedding"])
+            embedding_tensor = torch.from_numpy(embedding).float().to(self.device)
+            features = sae.encode(embedding_tensor)
+            return {
+                "top_indices": features.top_indices.tolist(),
+                "top_acts": features.top_acts.tolist()
+            }
+        if "features" in item:
+            top_acts = np.array(item["features"]["top_acts"])
+            top_indices = np.array(item["features"]["top_indices"])
+            top_acts_tensor = torch.from_numpy(top_acts).float().to(self.device)
+            top_indices_tensor = torch.from_numpy(top_indices).long().to(self.device)
+            embedding = sae.decode(top_acts=top_acts_tensor, top_indices=top_indices_tensor)
+            return embedding.tolist()
+
+    @web_endpoint(method="POST")
+    def nn_embed(self, item: dict):
+        table = self.get_table(item["db"], item["scope"])
+        results = table.search(item["embedding"]).metric("cosine").limit(100).to_list()
+        return results
