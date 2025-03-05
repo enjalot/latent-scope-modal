@@ -131,37 +131,17 @@ class App:
         return self.transformer_models[model_name]
 
     @web_endpoint(method="GET")
-    def nn(self, query: str, model: str, db: str, scope: str):
+    def nn(self, query: str, model: str, db: str, scope: str, results: bool = False):
         model = self.get_model(model)
         table = self.get_table(db, scope)
         print(db, scope, "🔍 query", query)
         embeddings = model.encode(query, normalize_embeddings=True)
-        results = table.search(embeddings).metric("cosine").select(["index"]).limit(BIG_LIMIT).to_list()
-        return results
-
-    @web_endpoint(method="GET")
-    def nn2(self, query: str, model: str, db: str, scope: str):
-        model = self.get_model(model)
-        table = self.get_table(db, scope)
-        print(db, scope, "🔍 query", query)
-        embeddings = model.encode(query, normalize_embeddings=True)
-        print("searching")
-        results = table.search(embeddings).metric("cosine").limit(100).to_list()
-        print("done")
-        return results
-
-    
-    # @web_endpoint(method="GET")
-    # def scope_meta(self, db: str, scope: str):
-    #     with open(f"/lancedb/{db}/{scope}.json", "r") as f:
-    #         return json.load(f)
-    
-    # @web_endpoint(method="GET")
-    # def scope_data(self, db: str, scope: str):
-    #     table = self.get_table(db, scope)
-    #     print(db, scope, "🥧 scope_data")
-    #     columns = ["index","x","y","tile_index_64","cluster","raw_cluster","deleted"]
-    #     return table.search().select(columns).limit(BIG_LIMIT).to_list()
+        limit = 100 if results else BIG_LIMIT
+        res = table.search(embeddings).metric("cosine").limit(limit)
+        if results:
+            return res.to_list()
+        else:
+            return res.select(["index"]).to_list()
 
     @web_endpoint(method="GET")
     def rows_by_index(self, db: str, scope: str, indices: str):
@@ -220,7 +200,6 @@ class App:
 
     @web_endpoint(method="GET")
     def calc_embedding(self, query: str):
-        from transformers import AutoTokenizer, AutoModel
         import torch
 
         model_name = "nomic-ai/nomic-embed-text-v1.5"
@@ -232,45 +211,51 @@ class App:
             input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
             return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
+        text = [query]
 
-        def get_hidden_states(text, model, tokenizer):
-            # Tokenize the text and move to GPU if available
-            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-            tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
-            # Get token spans to preserve boundaries
-            encoding = tokenizer(text, return_offsets_mapping=True)
-            token_spans = encoding.offset_mapping
+        # Tokenize the text and move to GPU if available
+        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+        # Get token spans to preserve boundaries
+        encoding = tokenizer(text, return_offsets_mapping=True)
+        token_spans = encoding.offset_mapping
 
-            print("tokens", tokens)
-            print("token_spans", token_spans)
+        print("tokens", tokens)
+        print("token_spans", token_spans)
 
-            print("tokens", tokens)
-            print("DECODED",tokenizer.decode(inputs["input_ids"][0]))
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            model = model.to(device)
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+        print("tokens", tokens)
+        print("DECODED",tokenizer.decode(inputs["input_ids"][0]))
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = model.to(device)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        # Get hidden states
+        with torch.no_grad():
+            outputs = model(**inputs)
             
-            # Get hidden states
-            with torch.no_grad():
-                outputs = model(**inputs)
-                
-            # Get the last hidden state
-            embedding = mean_pooling(outputs[0], inputs["attention_mask"])
-            normalized_embeddings = torch.nn.functional.normalize(embedding, p=2, dim=1)
-            normalized_hidden_states = torch.nn.functional.normalize(outputs[0], p=2, dim=1)
-            return { 
-                "text": text,
-                "token_ids": inputs["input_ids"].cpu().numpy().tolist()[0],
-                "tokens": tokens,
-                "token_spans": token_spans,
-                "hidden_states": normalized_hidden_states.cpu().numpy().tolist(), 
-                "embedding": normalized_embeddings.cpu().numpy().tolist()[0]  # we only embed one query at a time
-            }
-        return get_hidden_states([query], model, tokenizer)
+        # Get the last hidden state
+        embedding = mean_pooling(outputs[0], inputs["attention_mask"])
+        normalized_embeddings = torch.nn.functional.normalize(embedding, p=2, dim=1)
+        normalized_hidden_states = torch.nn.functional.normalize(outputs[0], p=2, dim=1)
+        return { 
+            "text": text,
+            "token_ids": inputs["input_ids"].cpu().numpy().tolist()[0],
+            "tokens": tokens,
+            "token_spans": token_spans,
+            "hidden_states": normalized_hidden_states.cpu().numpy().tolist(), 
+            "embedding": normalized_embeddings.cpu().numpy().tolist()[0]  # we only embed one query at a time
+        }
 
     @web_endpoint(method="POST")
     def calc_sae(self, item: dict):
         print("calc_sae", item.keys())
+
+        # hack because we ran out of endpoints
+        if "neighbors" in item:
+            table = self.get_table(item["db"], item["scope"])
+            results = table.search(item["embedding"]).metric("cosine").limit(100).to_list()
+            return results
+
         model_name = "enjalot/sae-nomic-text-v1.5-FineWeb-edu-100BT"
         k_expansion = "64_32"
         sae = self.get_sae(model_name, k_expansion)
@@ -289,9 +274,3 @@ class App:
             top_indices_tensor = torch.from_numpy(top_indices).long().to(self.device)
             embedding = sae.decode(top_acts=top_acts_tensor, top_indices=top_indices_tensor)
             return embedding.tolist()
-
-    @web_endpoint(method="POST")
-    def nn_embed(self, item: dict):
-        table = self.get_table(item["db"], item["scope"])
-        results = table.search(item["embedding"]).metric("cosine").limit(100).to_list()
-        return results
