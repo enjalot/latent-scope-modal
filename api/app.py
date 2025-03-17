@@ -242,8 +242,11 @@ class App:
             "token_ids": inputs["input_ids"].cpu().numpy().tolist()[0],
             "tokens": tokens,
             "token_spans": token_spans,
-            "hidden_states": normalized_hidden_states.cpu().numpy().tolist(), 
-            "embedding": normalized_embeddings.cpu().numpy().tolist()[0]  # we only embed one query at a time
+            # "hidden_states": normalized_hidden_states.cpu().numpy().tolist(), 
+            "hidden_states": outputs[0].cpu().numpy().tolist(),
+            "attention_mask": inputs["attention_mask"].cpu().numpy().tolist()[0],
+            "embedding": normalized_embeddings.cpu().numpy().tolist()[0],  # we only embed one query at a time
+            "embedding_raw": embedding.cpu().numpy().tolist()[0]
         }
 
     @web_endpoint(method="POST")
